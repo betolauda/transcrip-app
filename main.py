@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
 import whisper
 import sqlite3
@@ -16,7 +16,7 @@ DB_PATH = "data/transcriptions.db"
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load Whisper model once (you can switch "base" → "small" / "medium")
+# Load Whisper model once
 model = whisper.load_model("base")
 
 # ---------- SAMPLE LEXICONS ----------
@@ -39,7 +39,6 @@ SPANISH_STOPWORDS = {
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Transcriptions
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transcriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,7 +47,6 @@ def init_db():
             created_at TEXT
         )
     """)
-    # Economic glossary
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS economic_glossary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +55,6 @@ def init_db():
             first_seen TEXT
         )
     """)
-    # Argentine dictionary
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS argentine_dictionary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +62,6 @@ def init_db():
             first_seen TEXT
         )
     """)
-    # Candidate terms
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS candidate_terms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +90,7 @@ def update_glossaries(transcript: str):
                     VALUES (?, ?, ?)
                 """, (term, "economic", now))
             except sqlite3.IntegrityError:
-                pass  # already exists
+                pass
 
     # Argentine expressions
     for exp in ARG_EXPRESSIONS:
@@ -105,7 +101,7 @@ def update_glossaries(transcript: str):
                     VALUES (?, ?)
                 """, (exp, now))
             except sqlite3.IntegrityError:
-                pass  # already exists
+                pass
 
     conn.commit()
     conn.close()
@@ -116,7 +112,7 @@ def normalize_token(token: str) -> str:
     token = "".join(
         c for c in unicodedata.normalize("NFD", token)
         if unicodedata.category(c) != "Mn"
-    )  # remove accents
+    )
     return token
 
 
@@ -131,7 +127,7 @@ def detect_new_terms(transcript: str):
         if not w or w in SPANISH_STOPWORDS or len(w) < 3:
             continue
 
-        # Already in glossaries?
+        # Check if already present
         cursor.execute("SELECT 1 FROM economic_glossary WHERE term=?", (w,))
         if cursor.fetchone():
             continue
@@ -142,10 +138,7 @@ def detect_new_terms(transcript: str):
         if cursor.fetchone():
             continue
 
-        # Grab context window
-        start = max(0, i-3)
-        end = min(len(words), i+4)
-        context = " ".join(words[start:end])
+        context = " ".join(words[max(0,i-3): min(len(words),i+4)])
 
         try:
             cursor.execute("""
@@ -162,7 +155,7 @@ def detect_new_terms(transcript: str):
 app = FastAPI(
     title="Argentina Economy Analyzer API",
     description="Offline transcription + glossary updater + candidate detection",
-    version="0.3"
+    version="0.4"
 )
 
 @app.post("/upload")
@@ -180,7 +173,6 @@ async def upload_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
-    # Store transcription
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -190,7 +182,6 @@ async def upload_audio(file: UploadFile = File(...)):
     conn.commit()
     conn.close()
 
-    # Update glossaries & detect candidates
     update_glossaries(transcript_text)
     detect_new_terms(transcript_text)
 
@@ -225,6 +216,47 @@ async def get_candidates():
     conn.close()
     return {"candidates": rows}
 
+
+@app.post("/promote")
+async def promote_candidate(
+    term: str = Query(..., description="Candidate term to promote"),
+    glossary: str = Query(..., description="Target glossary: 'economic' or 'argentine'")
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+
+    # Check candidate exists
+    cursor.execute("SELECT term FROM candidate_terms WHERE term=?", (term,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Candidate term not found")
+
+    try:
+        if glossary == "economic":
+            cursor.execute("""
+                INSERT INTO economic_glossary (term, category, first_seen)
+                VALUES (?, ?, ?)
+            """, (term, "manual", now))
+        elif glossary == "argentine":
+            cursor.execute("""
+                INSERT INTO argentine_dictionary (expression, first_seen)
+                VALUES (?, ?)
+            """, (term, now))
+        else:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Glossary must be 'economic' or 'argentine'")
+
+        # Remove from candidate pool
+        cursor.execute("DELETE FROM candidate_terms WHERE term=?", (term,))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Term already exists in target glossary")
+
+    conn.close()
+    return {"message": f"Term '{term}' promoted to {glossary} glossary"}
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
