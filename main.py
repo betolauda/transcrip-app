@@ -14,6 +14,7 @@ from src.services.term_detection_service import TermDetectionService
 from src.repositories.database_repository import DatabaseRepository
 from src.api.auth_endpoints import router as auth_router
 from src.api.monitoring_endpoints import router as monitoring_router
+from src.api.database_endpoints import router as database_router
 from src.auth.dependencies import get_current_active_user, rate_limit_upload, rate_limit_general
 from src.middleware.rate_limiting import rate_limit_middleware, setup_periodic_cleanup
 from src.middleware.validation import validation_middleware
@@ -43,6 +44,16 @@ async def lifespan(app: FastAPI):
     if settings.ENABLE_RATE_LIMITING:
         setup_periodic_cleanup()
         logger.info("Started rate limiting cleanup worker")
+
+    # Auto-apply database migrations on startup
+    try:
+        from src.database.migrations import auto_migrate
+        if auto_migrate():
+            logger.info("Database migrations applied successfully")
+        else:
+            logger.warning("Database migration check failed")
+    except Exception as e:
+        logger.error(f"Error during database migration: {e}")
 
     yield
     logger.info("Shutting down Argentina Economy Analyzer API")
@@ -82,6 +93,9 @@ app.include_router(auth_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Include monitoring router
 app.include_router(monitoring_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Include database management router
+app.include_router(database_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Create a router for protected endpoints
 from fastapi import APIRouter
