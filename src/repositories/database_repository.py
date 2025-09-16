@@ -86,14 +86,30 @@ class DatabaseRepository:
             conn.commit()
 
     # Transcription operations
-    def save_transcription(self, filename: str, transcript: str) -> int:
+    def save_transcription(self, filename: str, transcript: str,
+                          file_size: int = 0, duration_seconds: float = 0.0,
+                          language: str = "es") -> int:
         """Save a new transcription and return its ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO transcriptions (filename, transcript, created_at)
-                VALUES (?, ?, ?)
-            """, (filename, transcript, datetime.utcnow().isoformat()))
+
+            # Check if enhanced columns exist (from migrations)
+            cursor.execute("PRAGMA table_info(transcriptions)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'file_size' in columns and 'duration_seconds' in columns and 'language' in columns:
+                # Use enhanced schema
+                cursor.execute("""
+                    INSERT INTO transcriptions (filename, transcript, created_at, file_size, duration_seconds, language)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (filename, transcript, datetime.utcnow().isoformat(), file_size, duration_seconds, language))
+            else:
+                # Use basic schema
+                cursor.execute("""
+                    INSERT INTO transcriptions (filename, transcript, created_at)
+                    VALUES (?, ?, ?)
+                """, (filename, transcript, datetime.utcnow().isoformat()))
+
             conn.commit()
             return cursor.lastrowid
 

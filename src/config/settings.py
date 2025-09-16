@@ -60,6 +60,18 @@ class Settings:
     SUSPICIOUS_IP_THRESHOLD: int = int(os.getenv("SUSPICIOUS_IP_THRESHOLD", "50"))  # requests before blocking
     IP_BLOCK_DURATION: int = int(os.getenv("IP_BLOCK_DURATION", "3600"))           # seconds (1 hour)
 
+    # Audio processing settings
+    ENABLE_AUDIO_OPTIMIZATION: bool = os.getenv("ENABLE_AUDIO_OPTIMIZATION", "true").lower() == "true"
+    AUDIO_QUALITY_THRESHOLD: float = float(os.getenv("AUDIO_QUALITY_THRESHOLD", "0.6"))
+    AUDIO_NOISE_THRESHOLD: float = float(os.getenv("AUDIO_NOISE_THRESHOLD", "0.3"))
+    CHUNKED_PROCESSING_THRESHOLD: int = int(os.getenv("CHUNKED_PROCESSING_THRESHOLD", "300"))  # seconds (5 minutes)
+    CHUNK_DURATION: float = float(os.getenv("CHUNK_DURATION", "30.0"))  # seconds
+    CHUNK_OVERLAP: float = float(os.getenv("CHUNK_OVERLAP", "2.0"))     # seconds
+    TARGET_SAMPLE_RATE: int = int(os.getenv("TARGET_SAMPLE_RATE", "16000"))  # Hz
+    TARGET_CHANNELS: int = int(os.getenv("TARGET_CHANNELS", "1"))             # mono
+    CLEANUP_PROCESSED_FILES: bool = os.getenv("CLEANUP_PROCESSED_FILES", "true").lower() == "true"
+    PROCESSED_FILE_MAX_AGE: int = int(os.getenv("PROCESSED_FILE_MAX_AGE", "24"))  # hours
+
     # Economic terms (hardcoded for now, could be moved to database)
     ECONOMIC_TERMS: List[str] = [
         "inflación", "pobreza", "desempleo", "reservas", "dólar", "peso",

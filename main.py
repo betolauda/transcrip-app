@@ -16,6 +16,7 @@ from src.api.auth_endpoints import router as auth_router
 from src.api.monitoring_endpoints import router as monitoring_router
 from src.api.database_endpoints import router as database_router
 from src.api.examples_endpoints import router as examples_router
+from src.api.audio_endpoints import router as audio_router
 from src.auth.dependencies import get_current_active_user, rate_limit_upload, rate_limit_general
 from src.middleware.rate_limiting import rate_limit_middleware, setup_periodic_cleanup
 from src.middleware.validation import validation_middleware
@@ -103,6 +104,9 @@ app.include_router(database_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Include examples and guides router
 app.include_router(examples_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Include audio processing router
+app.include_router(audio_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Create a router for protected endpoints
 from fastapi import APIRouter
