@@ -1,263 +1,211 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import JSONResponse
-import whisper
-import sqlite3
-import os
+import logging
 import shutil
 import uvicorn
-from datetime import datetime
+from contextlib import asynccontextmanager
 from pathlib import Path
-import re
-import unicodedata
-import string
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.responses import JSONResponse
 
-# ---------- CONFIG ----------
-DB_PATH = "data/transcriptions.db"
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+from src.config.settings import settings
+from src.services.transcription_service import TranscriptionService
+from src.services.glossary_service import GlossaryService
+from src.services.term_detection_service import TermDetectionService
+from src.repositories.database_repository import DatabaseRepository
 
-# Load Whisper model once
-model = whisper.load_model("base")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# ---------- SAMPLE LEXICONS ----------
-ECONOMIC_TERMS = [
-    "inflación", "pobreza", "desempleo", "reservas", "dólar", "peso",
-    "PIB", "déficit", "superávit", "tarifas", "subsidios", "impuestos"
-]
-ARG_EXPRESSIONS = [
-    "laburo", "guita", "quilombo", "bondi", "mango", "fiaca",
-    "che", "posta", "macana", "changas"
-]
+# Initialize services
+db_repository = DatabaseRepository()
+transcription_service = TranscriptionService(db_repository)
+glossary_service = GlossaryService(db_repository)
+term_detection_service = TermDetectionService(db_repository)
 
-SPANISH_STOPWORDS = {
-    "el","la","los","las","de","del","y","o","que","en","es","un","una","por",
-    "con","al","se","lo","su","para","a","como","más","menos","ya","pero","sin",
-    "sobre","esto","esta","ese","esa","esas","estos","esas","sí","no"
-}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events"""
+    logger.info("Starting Argentina Economy Analyzer API")
+    logger.info(f"Database path: {settings.DB_PATH}")
+    logger.info(f"Upload directory: {settings.UPLOAD_DIR}")
+    yield
+    logger.info("Shutting down Argentina Economy Analyzer API")
 
-# ---------- DB SETUP ----------
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transcriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT,
-            transcript TEXT,
-            created_at TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS economic_glossary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            term TEXT UNIQUE,
-            category TEXT,
-            first_seen TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS argentine_dictionary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            expression TEXT UNIQUE,
-            first_seen TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS candidate_terms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            term TEXT UNIQUE,
-            first_seen TEXT,
-            context_snippet TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ---------- HELPERS ----------
-def update_glossaries(transcript: str):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
-
-    # Economic terms
-    for term in ECONOMIC_TERMS:
-        if re.search(rf"\b{term}\b", transcript, re.IGNORECASE):
-            try:
-                cursor.execute("""
-                    INSERT INTO economic_glossary (term, category, first_seen)
-                    VALUES (?, ?, ?)
-                """, (term, "economic", now))
-            except sqlite3.IntegrityError:
-                pass
-
-    # Argentine expressions
-    for exp in ARG_EXPRESSIONS:
-        if re.search(rf"\b{exp}\b", transcript, re.IGNORECASE):
-            try:
-                cursor.execute("""
-                    INSERT INTO argentine_dictionary (expression, first_seen)
-                    VALUES (?, ?)
-                """, (exp, now))
-            except sqlite3.IntegrityError:
-                pass
-
-    conn.commit()
-    conn.close()
-
-
-def normalize_token(token: str) -> str:
-    token = token.lower().strip(string.punctuation)
-    token = "".join(
-        c for c in unicodedata.normalize("NFD", token)
-        if unicodedata.category(c) != "Mn"
-    )
-    return token
-
-
-def detect_new_terms(transcript: str):
-    words = [normalize_token(w) for w in transcript.split()]
-    now = datetime.utcnow().isoformat()
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    for i, w in enumerate(words):
-        if not w or w in SPANISH_STOPWORDS or len(w) < 3:
-            continue
-
-        # Check if already present
-        cursor.execute("SELECT 1 FROM economic_glossary WHERE term=?", (w,))
-        if cursor.fetchone():
-            continue
-        cursor.execute("SELECT 1 FROM argentine_dictionary WHERE expression=?", (w,))
-        if cursor.fetchone():
-            continue
-        cursor.execute("SELECT 1 FROM candidate_terms WHERE term=?", (w,))
-        if cursor.fetchone():
-            continue
-
-        context = " ".join(words[max(0,i-3): min(len(words),i+4)])
-
-        try:
-            cursor.execute("""
-                INSERT INTO candidate_terms (term, first_seen, context_snippet)
-                VALUES (?, ?, ?)
-            """, (w, now, context))
-        except sqlite3.IntegrityError:
-            pass
-
-    conn.commit()
-    conn.close()
-
-# ---------- FASTAPI ----------
+# Initialize FastAPI app
 app = FastAPI(
     title="Argentina Economy Analyzer API",
-    description="Offline transcription + glossary updater + candidate detection",
-    version="0.4"
+    description="Offline transcription + glossary updater + candidate detection (Refactored)",
+    version="1.0",
+    lifespan=lifespan
 )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "version": "1.0"}
 
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
-    if not file.filename.endswith(".mp3"):
-        raise HTTPException(status_code=400, detail="Only .mp3 files are supported")
-
-    save_path = UPLOAD_DIR / file.filename
-    with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
+    """
+    Upload and process audio file
+    - Validates file format and security
+    - Transcribes audio using Whisper
+    - Updates glossaries with found terms
+    - Detects new candidate terms
+    """
     try:
-        result = model.transcribe(str(save_path), language="es")
-        transcript_text = result["text"]
+        # Basic file validation
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        if not file.filename.endswith(".mp3"):
+            raise HTTPException(status_code=400, detail="Only .mp3 files are supported")
+
+        # Save uploaded file
+        save_path = settings.UPLOAD_DIR / file.filename
+        try:
+            with open(save_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+        except Exception as e:
+            logger.error(f"Failed to save file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+
+        # Transcribe audio
+        transcription_result = transcription_service.transcribe_audio(save_path, file.filename)
+
+        if not transcription_result.success:
+            # Clean up file on failure
+            transcription_service.cleanup_file(save_path)
+            raise HTTPException(
+                status_code=400 if "validation" in transcription_result.message.lower() else 500,
+                detail=transcription_result.error or transcription_result.message
+            )
+
+        # Use the full transcript for processing glossaries and term detection
+        full_transcript = transcription_result.full_transcript
+
+        # Update glossaries
+        glossary_stats = glossary_service.update_glossaries(full_transcript)
+
+        # Detect new terms
+        detection_stats = term_detection_service.detect_new_terms(full_transcript)
+
+        # Clean up uploaded file
+        transcription_service.cleanup_file(save_path)
+
+        # Prepare response
+        response_data = {
+            "filename": file.filename,
+            "transcript_preview": transcription_result.transcript_preview,
+            "message": "File processed, saved, glossaries updated, candidates detected",
+            "stats": {
+                **glossary_stats,
+                **detection_stats
+            }
+        }
+
+        logger.info(f"Successfully processed {file.filename}: {response_data['stats']}")
+        return JSONResponse(content=response_data)
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO transcriptions (filename, transcript, created_at)
-        VALUES (?, ?, ?)
-    """, (file.filename, transcript_text, datetime.utcnow().isoformat()))
-    conn.commit()
-    conn.close()
-
-    update_glossaries(transcript_text)
-    detect_new_terms(transcript_text)
-
-    return JSONResponse(content={
-        "filename": file.filename,
-        "transcript_preview": transcript_text[:200] + ("..." if len(transcript_text) > 200 else ""),
-        "message": "File processed, saved, glossaries updated, candidates detected"
-    })
-
+        logger.error(f"Unexpected error processing {file.filename if file.filename else 'unknown'}: {e}")
+        # Try to clean up file if it exists
+        if 'save_path' in locals() and save_path.exists():
+            transcription_service.cleanup_file(save_path)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/glossaries")
 async def get_glossaries():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT term, category, first_seen FROM economic_glossary")
-    econ = cursor.fetchall()
-    cursor.execute("SELECT expression, first_seen FROM argentine_dictionary")
-    arg = cursor.fetchall()
-    conn.close()
-    return {
-        "economic_glossary": econ,
-        "argentine_dictionary": arg
-    }
-
+    """Get all terms from economic glossary and Argentine dictionary"""
+    try:
+        glossaries = glossary_service.get_glossaries()
+        return glossaries
+    except Exception as e:
+        logger.error(f"Error retrieving glossaries: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve glossaries")
 
 @app.get("/candidates")
 async def get_candidates():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT term, first_seen, context_snippet FROM candidate_terms")
-    rows = cursor.fetchall()
-    conn.close()
-    return {"candidates": rows}
+    """Get all candidate terms awaiting promotion"""
+    try:
+        candidates = term_detection_service.get_candidates()
+        stats = term_detection_service.get_candidate_statistics()
 
+        return {
+            "candidates": candidates,
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving candidates: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve candidates")
 
 @app.post("/promote")
 async def promote_candidate(
     term: str = Query(..., description="Candidate term to promote"),
     glossary: str = Query(..., description="Target glossary: 'economic' or 'argentine'")
 ):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
-
-    # Check candidate exists
-    cursor.execute("SELECT term FROM candidate_terms WHERE term=?", (term,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Candidate term not found")
-
+    """Promote a candidate term to either economic glossary or Argentine dictionary"""
     try:
+        # Validate glossary parameter
+        if glossary not in ["economic", "argentine"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Glossary must be 'economic' or 'argentine'"
+            )
+
+        # Validate term exists
+        if not db_repository.candidate_term_exists(term):
+            raise HTTPException(status_code=404, detail="Candidate term not found")
+
+        # Promote based on target glossary
         if glossary == "economic":
-            cursor.execute("""
-                INSERT INTO economic_glossary (term, category, first_seen)
-                VALUES (?, ?, ?)
-            """, (term, "manual", now))
-        elif glossary == "argentine":
-            cursor.execute("""
-                INSERT INTO argentine_dictionary (expression, first_seen)
-                VALUES (?, ?)
-            """, (term, now))
+            success = glossary_service.promote_candidate_to_economic(term)
         else:
-            conn.close()
-            raise HTTPException(status_code=400, detail="Glossary must be 'economic' or 'argentine'")
+            success = glossary_service.promote_candidate_to_argentine(term)
 
-        # Remove from candidate pool
-        cursor.execute("DELETE FROM candidate_terms WHERE term=?", (term,))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        raise HTTPException(status_code=409, detail="Term already exists in target glossary")
+        if not success:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Term '{term}' already exists in {glossary} glossary"
+            )
 
-    conn.close()
-    return {"message": f"Term '{term}' promoted to {glossary} glossary"}
+        logger.info(f"Successfully promoted '{term}' to {glossary} glossary")
+        return {"message": f"Term '{term}' promoted to {glossary} glossary"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error promoting candidate '{term}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to promote candidate term")
+
+@app.delete("/candidates/{term}")
+async def remove_candidate(term: str):
+    """Remove a candidate term (for manual cleanup)"""
+    try:
+        success = term_detection_service.remove_candidate(term)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Candidate term not found")
+
+        return {"message": f"Candidate term '{term}' removed successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing candidate '{term}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove candidate term")
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host=settings.API_HOST,
+        port=settings.API_PORT,
+        reload=True,
+        log_level="info"
+    )
