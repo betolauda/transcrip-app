@@ -15,10 +15,12 @@ from src.repositories.database_repository import DatabaseRepository
 from src.api.auth_endpoints import router as auth_router
 from src.api.monitoring_endpoints import router as monitoring_router
 from src.api.database_endpoints import router as database_router
+from src.api.examples_endpoints import router as examples_router
 from src.auth.dependencies import get_current_active_user, rate_limit_upload, rate_limit_general
 from src.middleware.rate_limiting import rate_limit_middleware, setup_periodic_cleanup
 from src.middleware.validation import validation_middleware
 from src.middleware.monitoring import monitoring_middleware
+from src.api.documentation import get_custom_openapi, get_custom_swagger_ui_html, get_custom_redoc_html
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +65,9 @@ app = FastAPI(
     title="Spanish Audio Transcription API",
     description="Professional Spanish audio transcription with economic term detection and user authentication",
     version="1.1.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,  # Disable default docs
+    redoc_url=None  # Disable default redoc
 )
 
 # Add CORS middleware
@@ -96,6 +100,9 @@ app.include_router(monitoring_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Include database management router
 app.include_router(database_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Include examples and guides router
+app.include_router(examples_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Create a router for protected endpoints
 from fastapi import APIRouter
@@ -277,6 +284,24 @@ async def remove_candidate(term: str, current_user = Depends(rate_limit_general)
 
 # Include protected router
 app.include_router(protected_router)
+
+# Custom OpenAPI and documentation endpoints
+app.openapi = lambda: get_custom_openapi(app)
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Custom Swagger UI documentation."""
+    return get_custom_swagger_ui_html()
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc_html():
+    """Custom ReDoc documentation."""
+    return get_custom_redoc_html()
+
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi_schema():
+    """Get OpenAPI schema."""
+    return app.openapi()
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
