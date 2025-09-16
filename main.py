@@ -8,17 +8,18 @@ import uvicorn
 from datetime import datetime
 from pathlib import Path
 import re
+import unicodedata
+import string
 
 # ---------- CONFIG ----------
 DB_PATH = "data/transcriptions.db"
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load Whisper model once
+# Load Whisper model once (you can switch "base" → "small" / "medium")
 model = whisper.load_model("base")
 
 # ---------- SAMPLE LEXICONS ----------
-# Expand these lists over time, or connect to external CSVs
 ECONOMIC_TERMS = [
     "inflación", "pobreza", "desempleo", "reservas", "dólar", "peso",
     "PIB", "déficit", "superávit", "tarifas", "subsidios", "impuestos"
@@ -27,6 +28,12 @@ ARG_EXPRESSIONS = [
     "laburo", "guita", "quilombo", "bondi", "mango", "fiaca",
     "che", "posta", "macana", "changas"
 ]
+
+SPANISH_STOPWORDS = {
+    "el","la","los","las","de","del","y","o","que","en","es","un","una","por",
+    "con","al","se","lo","su","para","a","como","más","menos","ya","pero","sin",
+    "sobre","esto","esta","ese","esa","esas","estos","esas","sí","no"
+}
 
 # ---------- DB SETUP ----------
 def init_db():
@@ -56,6 +63,15 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             expression TEXT UNIQUE,
             first_seen TEXT
+        )
+    """)
+    # Candidate terms
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS candidate_terms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT UNIQUE,
+            first_seen TEXT,
+            context_snippet TEXT
         )
     """)
     conn.commit()
@@ -94,10 +110,60 @@ def update_glossaries(transcript: str):
     conn.commit()
     conn.close()
 
+
+def normalize_token(token: str) -> str:
+    token = token.lower().strip(string.punctuation)
+    token = "".join(
+        c for c in unicodedata.normalize("NFD", token)
+        if unicodedata.category(c) != "Mn"
+    )  # remove accents
+    return token
+
+
+def detect_new_terms(transcript: str):
+    words = [normalize_token(w) for w in transcript.split()]
+    now = datetime.utcnow().isoformat()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    for i, w in enumerate(words):
+        if not w or w in SPANISH_STOPWORDS or len(w) < 3:
+            continue
+
+        # Already in glossaries?
+        cursor.execute("SELECT 1 FROM economic_glossary WHERE term=?", (w,))
+        if cursor.fetchone():
+            continue
+        cursor.execute("SELECT 1 FROM argentine_dictionary WHERE expression=?", (w,))
+        if cursor.fetchone():
+            continue
+        cursor.execute("SELECT 1 FROM candidate_terms WHERE term=?", (w,))
+        if cursor.fetchone():
+            continue
+
+        # Grab context window
+        start = max(0, i-3)
+        end = min(len(words), i+4)
+        context = " ".join(words[start:end])
+
+        try:
+            cursor.execute("""
+                INSERT INTO candidate_terms (term, first_seen, context_snippet)
+                VALUES (?, ?, ?)
+            """, (w, now, context))
+        except sqlite3.IntegrityError:
+            pass
+
+    conn.commit()
+    conn.close()
+
 # ---------- FASTAPI ----------
-app = FastAPI(title="Argentina Economy Analyzer API",
-              description="Offline transcription + glossary pipeline",
-              version="0.2")
+app = FastAPI(
+    title="Argentina Economy Analyzer API",
+    description="Offline transcription + glossary updater + candidate detection",
+    version="0.3"
+)
 
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
@@ -124,14 +190,16 @@ async def upload_audio(file: UploadFile = File(...)):
     conn.commit()
     conn.close()
 
-    # Update glossaries
+    # Update glossaries & detect candidates
     update_glossaries(transcript_text)
+    detect_new_terms(transcript_text)
 
     return JSONResponse(content={
         "filename": file.filename,
         "transcript_preview": transcript_text[:200] + ("..." if len(transcript_text) > 200 else ""),
-        "message": "File processed, saved, and glossaries updated"
+        "message": "File processed, saved, glossaries updated, candidates detected"
     })
+
 
 @app.get("/glossaries")
 async def get_glossaries():
@@ -146,6 +214,17 @@ async def get_glossaries():
         "economic_glossary": econ,
         "argentine_dictionary": arg
     }
+
+
+@app.get("/candidates")
+async def get_candidates():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT term, first_seen, context_snippet FROM candidate_terms")
+    rows = cursor.fetchall()
+    conn.close()
+    return {"candidates": rows}
+
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
