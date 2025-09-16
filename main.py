@@ -3,14 +3,17 @@ import shutil
 import uvicorn
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.config.settings import settings
 from src.services.transcription_service import TranscriptionService
 from src.services.glossary_service import GlossaryService
 from src.services.term_detection_service import TermDetectionService
 from src.repositories.database_repository import DatabaseRepository
+from src.api.auth_endpoints import router as auth_router
+from src.auth.dependencies import get_current_active_user, rate_limit_upload, rate_limit_general
 
 # Configure logging
 logging.basicConfig(
@@ -36,19 +39,49 @@ async def lifespan(app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Argentina Economy Analyzer API",
-    description="Offline transcription + glossary updater + candidate detection (Refactored)",
-    version="1.0",
+    title="Spanish Audio Transcription API",
+    description="Professional Spanish audio transcription with economic term detection and user authentication",
+    version="1.1.0",
     lifespan=lifespan
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include authentication router
+app.include_router(auth_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Create a router for protected endpoints
+from fastapi import APIRouter
+protected_router = APIRouter(prefix=f"/api/{settings.API_VERSION}", dependencies=[Depends(get_current_active_user)])
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "version": "1.0"}
+    """Public health check endpoint"""
+    return {"status": "healthy", "version": "1.1.0", "authenticated": False}
 
-@app.post("/upload")
-async def upload_audio(file: UploadFile = File(...)):
+@app.get("/api/{settings.API_VERSION}/health")
+async def protected_health_check(current_user = Depends(get_current_active_user)):
+    """Protected health check endpoint"""
+    return {
+        "status": "healthy",
+        "version": "1.1.0",
+        "authenticated": True,
+        "user": current_user.username,
+        "role": current_user.role
+    }
+
+@protected_router.post("/upload")
+async def upload_audio(
+    file: UploadFile = File(...),
+    current_user = Depends(rate_limit_upload)
+):
     """
     Upload and process audio file
     - Validates file format and security
@@ -107,7 +140,7 @@ async def upload_audio(file: UploadFile = File(...)):
             }
         }
 
-        logger.info(f"Successfully processed {file.filename}: {response_data['stats']}")
+        logger.info(f"Successfully processed {file.filename} by user {current_user.username}: {response_data['stats']}")
         return JSONResponse(content=response_data)
 
     except HTTPException:
@@ -119,8 +152,8 @@ async def upload_audio(file: UploadFile = File(...)):
             transcription_service.cleanup_file(save_path)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/glossaries")
-async def get_glossaries():
+@protected_router.get("/glossaries")
+async def get_glossaries(current_user = Depends(rate_limit_general)):
     """Get all terms from economic glossary and Argentine dictionary"""
     try:
         glossaries = glossary_service.get_glossaries()
@@ -129,8 +162,8 @@ async def get_glossaries():
         logger.error(f"Error retrieving glossaries: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve glossaries")
 
-@app.get("/candidates")
-async def get_candidates():
+@protected_router.get("/candidates")
+async def get_candidates(current_user = Depends(rate_limit_general)):
     """Get all candidate terms awaiting promotion"""
     try:
         candidates = term_detection_service.get_candidates()
@@ -144,10 +177,11 @@ async def get_candidates():
         logger.error(f"Error retrieving candidates: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve candidates")
 
-@app.post("/promote")
+@protected_router.post("/promote")
 async def promote_candidate(
     term: str = Query(..., description="Candidate term to promote"),
-    glossary: str = Query(..., description="Target glossary: 'economic' or 'argentine'")
+    glossary: str = Query(..., description="Target glossary: 'economic' or 'argentine'"),
+    current_user = Depends(rate_limit_general)
 ):
     """Promote a candidate term to either economic glossary or Argentine dictionary"""
     try:
@@ -174,7 +208,7 @@ async def promote_candidate(
                 detail=f"Term '{term}' already exists in {glossary} glossary"
             )
 
-        logger.info(f"Successfully promoted '{term}' to {glossary} glossary")
+        logger.info(f"Successfully promoted '{term}' to {glossary} glossary by user {current_user.username}")
         return {"message": f"Term '{term}' promoted to {glossary} glossary"}
 
     except HTTPException:
@@ -183,8 +217,8 @@ async def promote_candidate(
         logger.error(f"Error promoting candidate '{term}': {e}")
         raise HTTPException(status_code=500, detail="Failed to promote candidate term")
 
-@app.delete("/candidates/{term}")
-async def remove_candidate(term: str):
+@protected_router.delete("/candidates/{term}")
+async def remove_candidate(term: str, current_user = Depends(rate_limit_general)):
     """Remove a candidate term (for manual cleanup)"""
     try:
         success = term_detection_service.remove_candidate(term)
@@ -192,6 +226,7 @@ async def remove_candidate(term: str):
         if not success:
             raise HTTPException(status_code=404, detail="Candidate term not found")
 
+        logger.info(f"Candidate term '{term}' removed by user {current_user.username}")
         return {"message": f"Candidate term '{term}' removed successfully"}
 
     except HTTPException:
@@ -199,6 +234,9 @@ async def remove_candidate(term: str):
     except Exception as e:
         logger.error(f"Error removing candidate '{term}': {e}")
         raise HTTPException(status_code=500, detail="Failed to remove candidate term")
+
+# Include protected router
+app.include_router(protected_router)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":

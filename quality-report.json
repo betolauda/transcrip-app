@@ -1,0 +1,28 @@
+{
+  "timestamp": "2025-09-16 20:44:37 UTC",
+  "total_duration": 4.79,
+  "overall_success": false,
+  "coverage": {
+    "error": "Coverage report not found"
+  },
+  "test_results": {
+    "security": false,
+    "unit_tests": false,
+    "integration_tests": false,
+    "api_tests": false,
+    "performance_tests": false
+  },
+  "code_quality": {
+    "overall": false,
+    "flake8": false,
+    "black": false,
+    "isort": false,
+    "mypy": false
+  },
+  "quality_gates": {
+    "min_coverage": false,
+    "all_tests_pass": false,
+    "code_quality_pass": false,
+    "security_pass": false
+  }
+}

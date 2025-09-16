@@ -1,0 +1,107 @@
+{
+  "test_directories": {
+    "tests/unit": true,
+    "tests/integration": true,
+    "tests/api": true,
+    "tests/security": true,
+    "tests/performance": true
+  },
+  "test_files": {
+    "tests/conftest.py": {
+      "exists": true,
+      "size": 9326,
+      "lines": 277
+    },
+    "tests/fixtures/test_data.py": {
+      "exists": true,
+      "size": 5099,
+      "lines": 146
+    },
+    "tests/utils/test_helpers.py": {
+      "exists": true,
+      "size": 8687,
+      "lines": 252
+    },
+    "tests/unit/repositories/test_database_repository.py": {
+      "exists": true,
+      "size": 19030,
+      "lines": 482
+    },
+    "tests/unit/services/test_transcription_service.py": {
+      "exists": true,
+      "size": 18879,
+      "lines": 428
+    },
+    "tests/unit/services/test_glossary_service.py": {
+      "exists": true,
+      "size": 18767,
+      "lines": 444
+    },
+    "tests/unit/services/test_term_detection_service.py": {
+      "exists": true,
+      "size": 20985,
+      "lines": 508
+    },
+    "tests/integration/test_service_interactions.py": {
+      "exists": true,
+      "size": 16493,
+      "lines": 381
+    },
+    "tests/api/test_endpoints.py": {
+      "exists": true,
+      "size": 24830,
+      "lines": 614
+    },
+    "tests/security/test_file_security.py": {
+      "exists": true,
+      "size": 13089,
+      "lines": 302
+    },
+    "tests/performance/test_performance.py": {
+      "exists": true,
+      "size": 21340,
+      "lines": 483
+    }
+  },
+  "config_files": {
+    "pytest.ini": {
+      "exists": true,
+      "size": 1104
+    },
+    ".coveragerc": {
+      "exists": true,
+      "size": 464
+    },
+    "requirements-dev.txt": {
+      "exists": true,
+      "size": 535
+    },
+    ".github/workflows/ci.yml": {
+      "exists": true,
+      "size": 6565
+    },
+    ".github/workflows/release.yml": {
+      "exists": true,
+      "size": 2861
+    },
+    "Makefile": {
+      "exists": true,
+      "size": 4297
+    },
+    "scripts/test_runner.py": {
+      "exists": true,
+      "size": 14964
+    },
+    "TESTING.md": {
+      "exists": true,
+      "size": 10175
+    }
+  },
+  "summary": {
+    "test_directories": "5/5",
+    "test_files": "11/11",
+    "config_files": "8/8",
+    "total_test_lines": 4317,
+    "framework_complete": true
+  }
+}
