@@ -13,7 +13,11 @@ from src.services.glossary_service import GlossaryService
 from src.services.term_detection_service import TermDetectionService
 from src.repositories.database_repository import DatabaseRepository
 from src.api.auth_endpoints import router as auth_router
+from src.api.monitoring_endpoints import router as monitoring_router
 from src.auth.dependencies import get_current_active_user, rate_limit_upload, rate_limit_general
+from src.middleware.rate_limiting import rate_limit_middleware, setup_periodic_cleanup
+from src.middleware.validation import validation_middleware
+from src.middleware.monitoring import monitoring_middleware
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +38,12 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Argentina Economy Analyzer API")
     logger.info(f"Database path: {settings.DB_PATH}")
     logger.info(f"Upload directory: {settings.UPLOAD_DIR}")
+
+    # Start periodic cleanup for rate limiting
+    if settings.ENABLE_RATE_LIMITING:
+        setup_periodic_cleanup()
+        logger.info("Started rate limiting cleanup worker")
+
     yield
     logger.info("Shutting down Argentina Economy Analyzer API")
 
@@ -54,8 +64,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add security and validation middleware (order matters)
+# Monitoring should be first to capture all requests
+app.middleware("http")(monitoring_middleware)
+logger.info("Enabled monitoring middleware")
+
+if settings.ENABLE_REQUEST_VALIDATION:
+    app.middleware("http")(validation_middleware)
+    logger.info("Enabled request validation middleware")
+
+if settings.ENABLE_RATE_LIMITING:
+    app.middleware("http")(rate_limit_middleware)
+    logger.info("Enabled rate limiting middleware")
+
 # Include authentication router
 app.include_router(auth_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Include monitoring router
+app.include_router(monitoring_router, prefix=f"/api/{settings.API_VERSION}")
 
 # Create a router for protected endpoints
 from fastapi import APIRouter

@@ -41,6 +41,24 @@ class Settings:
     # Rate limiting settings
     RATE_LIMIT_GENERAL: int = int(os.getenv("RATE_LIMIT_GENERAL", "100"))  # requests per hour
     RATE_LIMIT_UPLOAD: int = int(os.getenv("RATE_LIMIT_UPLOAD", "10"))   # uploads per hour
+    RATE_LIMIT_AUTH: int = int(os.getenv("RATE_LIMIT_AUTH", "5"))        # auth attempts per 5 minutes
+    RATE_LIMIT_IP: int = int(os.getenv("RATE_LIMIT_IP", "1000"))         # requests per hour per IP
+
+    # Request validation settings
+    MAX_REQUEST_SIZE: int = int(os.getenv("MAX_REQUEST_SIZE", "52428800"))  # 50MB in bytes
+    MAX_JSON_SIZE: int = int(os.getenv("MAX_JSON_SIZE", "1048576"))         # 1MB in bytes
+    MAX_FILENAME_LENGTH: int = int(os.getenv("MAX_FILENAME_LENGTH", "255"))
+    ENABLE_SECURITY_HEADERS: bool = os.getenv("ENABLE_SECURITY_HEADERS", "true").lower() == "true"
+
+    # Middleware settings
+    ENABLE_RATE_LIMITING: bool = os.getenv("ENABLE_RATE_LIMITING", "true").lower() == "true"
+    ENABLE_REQUEST_VALIDATION: bool = os.getenv("ENABLE_REQUEST_VALIDATION", "true").lower() == "true"
+    ENABLE_SECURITY_SCANNING: bool = os.getenv("ENABLE_SECURITY_SCANNING", "true").lower() == "true"
+
+    # IP blocking settings
+    AUTO_BLOCK_SUSPICIOUS_IPS: bool = os.getenv("AUTO_BLOCK_SUSPICIOUS_IPS", "true").lower() == "true"
+    SUSPICIOUS_IP_THRESHOLD: int = int(os.getenv("SUSPICIOUS_IP_THRESHOLD", "50"))  # requests before blocking
+    IP_BLOCK_DURATION: int = int(os.getenv("IP_BLOCK_DURATION", "3600"))           # seconds (1 hour)
 
     # Economic terms (hardcoded for now, could be moved to database)
     ECONOMIC_TERMS: List[str] = [
