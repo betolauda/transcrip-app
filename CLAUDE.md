@@ -22,26 +22,40 @@ This is a **Spanish audio transcription API** that uses OpenAI's Whisper model f
 
 ## Development Commands
 
+### Setup
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
 ### Running the Application
 
 ```bash
-# For development (with auto-reload)
+# Start FastAPI backend
 python3 main.py
 
-# Alternative using uvicorn directly
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+# Start Streamlit frontend (separate terminal)
+streamlit run app.py
 ```
 
-The API will be available at `http://localhost:8000`
+- **API**: `http://localhost:8000`
+- **Web Interface**: `http://localhost:8501`
+- **API Documentation**: `http://localhost:8000/docs`
 
 ### Dependencies
 
-The application requires:
-- `fastapi`
-- `uvicorn`
-- `whisper` (OpenAI Whisper)
-- `sqlite3` (built-in)
-- Standard Python libraries: `os`, `shutil`, `datetime`, `pathlib`
+Core dependencies (see `requirements.txt`):
+- `fastapi` - Web framework for the API
+- `uvicorn` - ASGI server for FastAPI
+- `whisper-openai` - OpenAI Whisper for transcription
+- `streamlit` - Web interface framework
+- `requests` - HTTP client for frontend-backend communication
+- `python-multipart` - File upload support
 
 ### Database Setup
 
